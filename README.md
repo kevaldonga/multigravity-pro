@@ -184,6 +184,57 @@ multigravity help
 
 ---
 
+## Antigravity CLI (`multigravity-cli`)
+
+Run multiple **Antigravity CLI** (`agy`) sessions with different Google/Antigravity accounts at the same time.
+
+`multigravity-cli` is a separate executable dedicated to the terminal CLI (`agy`), allowing you to use both the IDE manager (`multigravity`) and CLI manager (`multigravity-cli`) independently.
+
+### CLI Quick Start
+
+```bash
+# 1. Create a profile (auth-only shares settings and MCP, full profile isolates everything)
+multigravity-cli new work
+multigravity-cli new personal --auth-only
+
+# 2. Launch agy with that profile
+multigravity-cli work
+
+# 3. Pass any agy arguments through directly
+multigravity-cli work -p "Explain this project structure"
+multigravity-cli work models
+multigravity-cli work --model gemini-3.1-pro-high
+
+# 4. Check logged in accounts across profiles
+multigravity-cli list
+multigravity-cli whoami
+multigravity-cli status
+```
+
+### CLI Commands
+
+```
+multigravity-cli <name> [args...]       Launch agy with profile (forwards all flags)
+multigravity-cli new <name>             Create a new CLI profile
+multigravity-cli new <name> --auth-only Share settings & MCP (<50KB overhead)
+multigravity-cli new <name> --from <t>  Create from a saved template
+multigravity-cli new <name> --copy-from Clone auth from an existing profile
+multigravity-cli list                   List profiles with active logged-in emails
+multigravity-cli whoami [name]          Show active account details
+multigravity-cli status                 Dashboard: profile, account, status, type, size
+multigravity-cli clone <src> <dest>     Clone profile and its auth state
+multigravity-cli rename <old> <new>     Rename profile
+multigravity-cli delete <name>          Delete profile
+multigravity-cli template save/list/del Manage templates
+multigravity-cli export/import          Export/import .tar.gz archives
+multigravity-cli doctor                 Check agy installation and health
+multigravity-cli stats                  Profile disk usage
+multigravity-cli completion             Setup shell completion (bash/zsh/fish)
+multigravity-cli help
+```
+
+---
+
 ## Profile Name Rules
 
 - Letters, numbers, and hyphens only

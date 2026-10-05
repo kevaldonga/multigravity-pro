@@ -1,7 +1,7 @@
 $ErrorActionPreference = "Stop"
 
-$REPO = "Pulkit7070/multigravity-pro"
-$BRANCH = "main"
+$REPO = if ($env:MULTIGRAVITY_REPO) { $env:MULTIGRAVITY_REPO } else { "kevaldonga/multigravity-pro" }
+$BRANCH = if ($env:MULTIGRAVITY_BRANCH) { $env:MULTIGRAVITY_BRANCH } else { "main" }
 $RAW = "https://raw.githubusercontent.com/$REPO/$BRANCH"
 $INSTALL_DIR = "$env:USERPROFILE\.local\bin"
 
@@ -38,9 +38,7 @@ if (!$IN_PATH) {
     Write-Host ""
 }
 
-Write-Step "Downloading multigravity.ps1..."
-# Use -UseBasicParsing for compatibility with PS 5.1 on some systems
-# We download to a string first to ensure we can save with the correct encoding
+Write-Step "Downloading multigravity.ps1 (IDE)..."
 try {
     $scriptContent = Invoke-WebRequest -Uri "$RAW/multigravity.ps1" -UseBasicParsing -ErrorAction Stop
     [System.IO.File]::WriteAllText("$INSTALL_DIR\multigravity.ps1", $scriptContent.Content, [System.Text.Encoding]::UTF8)
@@ -48,19 +46,36 @@ try {
     Abort "Failed to download multigravity.ps1: $_"
 }
 
-Write-Step "Creating wrapper script..."
-$wrapper = @"
+Write-Step "Downloading multigravity-cli.ps1 (CLI)..."
+try {
+    $scriptContentCli = Invoke-WebRequest -Uri "$RAW/multigravity-cli.ps1" -UseBasicParsing -ErrorAction Stop
+    [System.IO.File]::WriteAllText("$INSTALL_DIR\multigravity-cli.ps1", $scriptContentCli.Content, [System.Text.Encoding]::UTF8)
+} catch {
+    Abort "Failed to download multigravity-cli.ps1: $_"
+}
+
+Write-Step "Creating wrapper scripts..."
+$wrapperIde = @"
 @echo off
 powershell.exe -ExecutionPolicy Bypass -File "%~dp0multigravity.ps1" %*
 "@
+[System.IO.File]::WriteAllText("$INSTALL_DIR\multigravity.cmd", $wrapperIde, [System.Text.Encoding]::ASCII)
 
-# Save wrapper as ASCII for widest compatibility with cmd.exe
-[System.IO.File]::WriteAllText("$INSTALL_DIR\multigravity.cmd", $wrapper, [System.Text.Encoding]::ASCII)
+$wrapperCli = @"
+@echo off
+powershell.exe -ExecutionPolicy Bypass -File "%~dp0multigravity-cli.ps1" %*
+"@
+[System.IO.File]::WriteAllText("$INSTALL_DIR\multigravity-cli.cmd", $wrapperCli, [System.Text.Encoding]::ASCII)
 
 Write-Host ""
 Write-Host "✓ Multigravity installed successfully!"
 Write-Host ""
-Write-Host "Usage:"
+Write-Host "Usage (Antigravity IDE):"
 Write-Host "  multigravity help"
 Write-Host "  multigravity new <profile-name>"
 Write-Host "  multigravity <profile-name>"
+Write-Host ""
+Write-Host "Usage (Antigravity CLI):"
+Write-Host "  multigravity-cli help"
+Write-Host "  multigravity-cli new <profile-name>"
+Write-Host "  multigravity-cli <profile-name>"

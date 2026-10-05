@@ -1,0 +1,972 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+shopt -s nullglob
+
+BASE="${MULTIGRAVITY_CLI_HOME:-$HOME/AntigravityCliProfiles}"
+REAL_HOME="$HOME"
+cmd="${1-}"
+
+abort() {
+  echo "Error: $1" >&2
+  exit 1
+}
+
+print_info() {
+  echo "$1"
+}
+
+platform() {
+  local raw
+  raw="${MULTIGRAVITY_PLATFORM-}"
+  if [ -z "$raw" ]; then
+    raw="$(uname -s)"
+  fi
+
+  raw="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]')"
+
+  case "$raw" in
+    darwin | macos | mac | osx)
+      printf '%s\n' "darwin"
+      ;;
+    linux)
+      printf '%s\n' "linux"
+      ;;
+    *)
+      abort "unsupported platform '$raw'. Multigravity CLI supports macOS and Linux."
+      ;;
+  esac
+}
+
+profile_dir() {
+  printf '%s/%s
+' "$BASE" "$1"
+}
+
+templates_dir() {
+  printf '%s/.templates
+' "$BASE"
+}
+
+is_auth_only() {
+  [ -f "$(profile_dir "$1")/.auth-only" ]
+}
+
+validate_name() {
+  local name=$1
+
+  if [[ -z "$name" ]]; then
+    abort "profile name required"
+  fi
+
+  if ! [[ "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9-]*$ ]]; then
+    abort "profile name must start with alphanumeric and contain only letters, numbers, or hyphens"
+  fi
+}
+
+command_or_path() {
+  local candidate=$1
+
+  if [ -z "$candidate" ]; then
+    return 1
+  fi
+
+  if [ -d "$candidate" ] || [ -x "$candidate" ]; then
+    printf '%s\n' "$candidate"
+    return 0
+  fi
+
+  if command -v "$candidate" >/dev/null 2>&1; then
+    command -v "$candidate"
+    return 0
+  fi
+
+  return 1
+}
+
+find_cli_app() {
+  local override candidate
+
+  override="${MULTIGRAVITY_CLI_APP-}"
+  if [ -n "$override" ] && command_or_path "$override" >/dev/null 2>&1; then
+    command_or_path "$override"
+    return 0
+  fi
+
+  for candidate in     "agy"     "/usr/bin/agy"     "/usr/local/bin/agy"     "$REAL_HOME/.local/bin/agy"     "$REAL_HOME/.gemini/antigravity-cli/bin/agy"
+  do
+    if command_or_path "$candidate" >/dev/null 2>&1; then
+      command_or_path "$candidate"
+      return 0
+    fi
+  done
+
+  return 1
+}
+
+require_cli_app() {
+  local app
+
+  if ! app="$(find_cli_app)"; then
+    abort "Antigravity CLI ('agy') was not found. Ensure 'agy' is on PATH, or set MULTIGRAVITY_CLI_APP to the executable path."
+  fi
+
+  printf '%s\n' "$app"
+}
+
+bridge_dotfiles() {
+  local profile_path=$1
+
+  # Symlink standard developer configs so git, ssh, and shell work seamlessly
+  for dotfile in .gitconfig .ssh; do
+    local src="$REAL_HOME/$dotfile"
+    local dest="$profile_path/$dotfile"
+    if [ -e "$src" ] && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+      ln -s "$src" "$dest"
+    fi
+  done
+
+  # Symlink git config in .config if present
+  if [ -d "$REAL_HOME/.config/git" ]; then
+    mkdir -p "$profile_path/.config"
+    if [ ! -e "$profile_path/.config/git" ] && [ ! -L "$profile_path/.config/git" ]; then
+      ln -s "$REAL_HOME/.config/git" "$profile_path/.config/git"
+    fi
+  fi
+}
+
+create_profile_layout() {
+  local profile_path=$1
+
+  mkdir -p "$profile_path"
+  mkdir -p     "$profile_path/.gemini/config/projects"     "$profile_path/.gemini/antigravity-cli/conversations"     "$profile_path/.gemini/antigravity-cli/brain"     "$profile_path/.gemini/antigravity-cli/cache"     "$profile_path/.gemini/antigravity-cli/log"     "$profile_path/.gemini/antigravity-cli/knowledge"     "$profile_path/.cache"
+
+  # Bridge dev dotfiles
+  bridge_dotfiles "$profile_path"
+
+  # Seed onboarding completion to provide immediate ready state if desired
+  local state_pbtxt="$profile_path/.gemini/antigravity-cli/jetski_state.pbtxt"
+  if [ ! -f "$state_pbtxt" ]; then
+    cat <<'EOF_PB' > "$state_pbtxt"
+post_onboarding:  {
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_USAGE_MODE
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE
+}
+EOF_PB
+  fi
+
+  # Copy default CLI settings if present and target doesn't exist
+  local default_cli_settings="$REAL_HOME/.gemini/antigravity-cli/settings.json"
+  local target_cli_settings="$profile_path/.gemini/antigravity-cli/settings.json"
+  if [ -f "$default_cli_settings" ] && [ ! -f "$target_cli_settings" ]; then
+    cp "$default_cli_settings" "$target_cli_settings"
+  fi
+}
+
+create_auth_only_layout() {
+  local profile_path=$1
+
+  mkdir -p "$profile_path"
+  touch "$profile_path/.auth-only"
+
+  mkdir -p     "$profile_path/.gemini/config"     "$profile_path/.gemini/antigravity-cli/conversations"     "$profile_path/.gemini/antigravity-cli/brain"     "$profile_path/.gemini/antigravity-cli/cache"     "$profile_path/.gemini/antigravity-cli/log"     "$profile_path/.cache"
+
+  # Bridge dev dotfiles
+  bridge_dotfiles "$profile_path"
+
+  # Share CLI settings from default via symlink
+  local default_cli_settings="$REAL_HOME/.gemini/antigravity-cli/settings.json"
+  local target_cli_settings="$profile_path/.gemini/antigravity-cli/settings.json"
+  if [ -f "$default_cli_settings" ] && [ ! -e "$target_cli_settings" ]; then
+    ln -s "$default_cli_settings" "$target_cli_settings"
+  fi
+
+  # Share MCP configuration via symlink
+  local default_mcp="$REAL_HOME/.gemini/config/mcp_config.json"
+  local target_mcp="$profile_path/.gemini/config/mcp_config.json"
+  if [ -f "$default_mcp" ] && [ ! -e "$target_mcp" ]; then
+    ln -s "$default_mcp" "$target_mcp"
+  fi
+
+  # Seed onboarding state
+  local state_pbtxt="$profile_path/.gemini/antigravity-cli/jetski_state.pbtxt"
+  if [ ! -f "$state_pbtxt" ]; then
+    cat <<'EOF_PB' > "$state_pbtxt"
+post_onboarding:  {
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_MANAGER_WELCOME
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_USAGE_MODE
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_AGENT_CONFIGURATION
+  completed_steps:  POST_ONBOARDING_STEP_TYPE_ADD_WORKSPACE
+}
+EOF_PB
+  fi
+}
+
+get_profile_email() {
+  local profile=$1
+  local p_dir
+  p_dir="$(profile_dir "$profile")"
+  local acc_file="$p_dir/.gemini/google_accounts.json"
+
+  if [ -f "$acc_file" ]; then
+    local email
+    email="$(grep -o '"active"[[:space:]]*:[[:space:]]*"[^"]*"' "$acc_file" 2>/dev/null | cut -d'"' -f4 2>/dev/null || true)"
+    if [ -n "$email" ]; then
+      printf '%s\n' "$email"
+      return 0
+    fi
+  fi
+
+  printf '%s\n' "(not signed in)"
+}
+
+launch_profile() {
+  local profile=$1
+  shift || true
+
+  local profile_path app
+  profile_path="$(profile_dir "$profile")"
+
+  if [ ! -d "$profile_path" ]; then
+    abort "profile '$profile' does not exist. Run: multigravity-cli new $profile"
+  fi
+
+  if is_auth_only "$profile"; then
+    create_auth_only_layout "$profile_path"
+  else
+    create_profile_layout "$profile_path"
+  fi
+
+  app="$(require_cli_app)"
+
+  local email
+  email="$(get_profile_email "$profile")"
+  if [ "$email" != "(not signed in)" ]; then
+    echo "Using profile '$profile' ($email)" >&2
+  else
+    echo "Using profile '$profile' [Sign in required]" >&2
+  fi
+
+  bridge_dotfiles "$profile_path"
+
+  export MULTIGRAVITY_CLI_PROFILE="$profile"
+  export HOME="$profile_path"
+
+  exec "$app" "$@"
+}
+
+list_profiles() {
+  local entries=""
+  local dir
+  local raw=${1-}
+
+  if [ "$raw" != "--raw" ]; then
+    echo "Existing Antigravity CLI profiles:"
+  fi
+
+  if [ ! -d "$BASE" ]; then
+    if [ "$raw" != "--raw" ]; then
+      echo "(none)"
+    fi
+    return 0
+  fi
+
+  for dir in "$BASE"/*; do
+    [ -d "$dir" ] || continue
+    local name
+    name="$(basename "$dir")"
+    [ "$name" = ".templates" ] && continue
+    entries="${entries}${name}"$'\n'
+  done
+
+  if [ -z "$entries" ]; then
+    if [ "$raw" != "--raw" ]; then
+      echo "(none)"
+    fi
+  else
+    if [ "$raw" = "--raw" ]; then
+      printf '%s' "$entries" | sort
+    else
+      while IFS= read -r p; do
+        [ -n "$p" ] || continue
+        local email
+        email="$(get_profile_email "$p")"
+        local tag=""
+        if is_auth_only "$p"; then
+          tag=" [auth-only]"
+        fi
+        printf '  • %-16s %-30s%s
+' "$p" "$email" "$tag"
+      done <<< "$(printf '%s' "$entries" | sort)"
+    fi
+  fi
+}
+
+new_profile() {
+  local profile=""
+  local auth_only=false
+  local from_template=""
+  local copy_from=""
+
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --auth-only) auth_only=true ;;
+      --from) from_template="${2-}"; shift ;;
+      --copy-from) copy_from="${2-}"; shift ;;
+      -*) abort "unknown option: $1" ;;
+      *) profile="$1" ;;
+    esac
+    shift
+  done
+
+  validate_name "$profile"
+
+  local target_dir
+  target_dir="$(profile_dir "$profile")"
+
+  if [ -e "$target_dir" ]; then
+    abort "profile '$profile' already exists at $target_dir"
+  fi
+
+  mkdir -p "$BASE"
+
+  if [ -n "$from_template" ]; then
+    local tpl_path="$(templates_dir)/$from_template"
+    if [ ! -d "$tpl_path" ]; then
+      abort "template '$from_template' does not exist. Run: multigravity-cli template list"
+    fi
+    print_info "Creating profile '$profile' from template '$from_template'..."
+    cp -R "$tpl_path" "$target_dir"
+  elif [ -n "$copy_from" ]; then
+    local src_dir="$(profile_dir "$copy_from")"
+    if [ ! -d "$src_dir" ]; then
+      abort "source profile '$copy_from' does not exist"
+    fi
+    print_info "Creating profile '$profile' copying auth from '$copy_from'..."
+    create_profile_layout "$target_dir"
+    for f in google_accounts.json oauth_creds.json settings.json; do
+      if [ -f "$src_dir/.gemini/$f" ]; then
+        cp "$src_dir/.gemini/$f" "$target_dir/.gemini/$f"
+      fi
+    done
+  elif [ "$auth_only" = true ]; then
+    create_auth_only_layout "$target_dir"
+  else
+    create_profile_layout "$target_dir"
+  fi
+
+  print_info "Created profile '$profile' at $target_dir"
+  print_info "To use this profile, run: multigravity-cli $profile"
+}
+
+whoami_cmd() {
+  local target=${1-}
+
+  if [ -n "$target" ]; then
+    local p_dir="$(profile_dir "$target")"
+    if [ ! -d "$p_dir" ]; then
+      abort "profile '$target' does not exist"
+    fi
+    local email="$(get_profile_email "$target")"
+    local p_type="full"
+    if is_auth_only "$target"; then p_type="auth-only"; fi
+    echo "Profile: $target"
+    echo "Account: $email"
+    echo "Type:    $p_type"
+    echo "Path:    $p_dir"
+    return 0
+  fi
+
+  if [ -n "${MULTIGRAVITY_CLI_PROFILE-}" ]; then
+    echo "Active Environment Profile: $MULTIGRAVITY_CLI_PROFILE ($(get_profile_email "$MULTIGRAVITY_CLI_PROFILE"))"
+    echo ""
+  fi
+
+  echo "Profile Accounts:"
+  printf "%-18s %-32s %-12s
+" "PROFILE" "ACCOUNT" "TYPE"
+  printf "%-18s %-32s %-12s
+" "-------" "-------" "----"
+
+  if [ -d "$BASE" ]; then
+    for dir in "$BASE"/*; do
+      [ -d "$dir" ] || continue
+      local name="$(basename "$dir")"
+      [ "$name" = ".templates" ] && continue
+      local email="$(get_profile_email "$name")"
+      local p_type="full"
+      if is_auth_only "$name"; then p_type="auth-only"; fi
+      printf "%-18s %-32s %-12s
+" "$name" "$email" "$p_type"
+    done
+  fi
+}
+
+clone_profile() {
+  local src=${1-}
+  local dest=${2-}
+
+  validate_name "$src"
+  validate_name "$dest"
+
+  local src_dir="$(profile_dir "$src")"
+  local dest_dir="$(profile_dir "$dest")"
+
+  if [ ! -d "$src_dir" ]; then
+    abort "source profile '$src' does not exist"
+  fi
+
+  if [ -e "$dest_dir" ]; then
+    abort "destination profile '$dest' already exists"
+  fi
+
+  print_info "Cloning profile '$src' to '$dest'..."
+  cp -R "$src_dir" "$dest_dir"
+
+  print_info "Successfully cloned '$src' to '$dest'"
+}
+
+rename_profile() {
+  local old=${1-}
+  local new=${2-}
+
+  validate_name "$old"
+  validate_name "$new"
+
+  local old_dir="$(profile_dir "$old")"
+  local new_dir="$(profile_dir "$new")"
+
+  if [ ! -d "$old_dir" ]; then
+    abort "profile '$old' does not exist"
+  fi
+
+  if [ -e "$new_dir" ]; then
+    abort "profile '$new' already exists"
+  fi
+
+  mv "$old_dir" "$new_dir"
+  print_info "Renamed profile '$old' to '$new'"
+}
+
+delete_profile() {
+  local profile=$1
+  validate_name "$profile"
+
+  local target_dir="$(profile_dir "$profile")"
+  if [ ! -d "$target_dir" ]; then
+    abort "profile '$profile' does not exist"
+  fi
+
+  read -r -p "Delete profile '$profile' and all its data? [y/N] " reply
+  case "$reply" in
+    y | Y | yes | YES)
+      rm -rf "$target_dir"
+      print_info "Deleted profile '$profile'"
+      ;;
+    *)
+      print_info "Cancelled"
+      ;;
+  esac
+}
+
+get_folder_size() {
+  local path=$1
+  if [ ! -d "$path" ]; then
+    echo "0 B"
+    return
+  fi
+
+  if du -sh "$path" >/dev/null 2>&1; then
+    du -sh "$path" 2>/dev/null | awk '{print $1}'
+  else
+    echo "unknown"
+  fi
+}
+
+get_last_used() {
+  local p_dir=$1
+  local hist="$p_dir/.gemini/antigravity-cli/history.jsonl"
+  local creds="$p_dir/.gemini/oauth_creds.json"
+  local target="$p_dir"
+
+  if [ -f "$hist" ]; then
+    target="$hist"
+  elif [ -f "$creds" ]; then
+    target="$creds"
+  fi
+
+  case "$(platform)" in
+    darwin)
+      stat -f "%Sm" -t "%Y-%m-%d %H:%M" "$target" 2>/dev/null || echo "never"
+      ;;
+    linux)
+      stat -c "%y" "$target" 2>/dev/null | cut -d'.' -f1 | cut -d' ' -f1,2 | cut -c1-16 || echo "never"
+      ;;
+  esac
+}
+
+is_profile_running() {
+  local profile=$1
+  local p_dir="$(profile_dir "$profile")"
+
+  if command -v pgrep >/dev/null 2>&1; then
+    for pid in $(pgrep -f "agy" 2>/dev/null || true); do
+      [ "$pid" = "$$" ] && continue
+      if [ -d "/proc/$pid" ]; then
+        if tr ' ' '
+' < "/proc/$pid/environ" 2>/dev/null | grep -q "^HOME=$p_dir$"; then
+          return 0
+        fi
+      fi
+    done
+  fi
+
+  return 1
+}
+
+status_cmd() {
+  if [ ! -d "$BASE" ]; then
+    echo "No profiles found."
+    return 0
+  fi
+
+  printf "%-14s %-26s %-10s %-11s %-16s %-8s\n"     "PROFILE" "ACCOUNT" "STATUS" "TYPE" "LAST USED" "SIZE"
+  printf "%-14s %-26s %-10s %-11s %-16s %-8s\n"     "-------" "-------" "------" "----" "---------" "----"
+
+  for dir in "$BASE"/*; do
+    [ -d "$dir" ] || continue
+    local name="$(basename "$dir")"
+    [ "$name" = ".templates" ] && continue
+
+    local email="$(get_profile_email "$name")"
+    if [ ${#email} -gt 25 ]; then
+      email="${email:0:22}..."
+    fi
+
+    local p_status="stopped"
+    if is_profile_running "$name"; then
+      p_status="running"
+    fi
+
+    local p_type="full"
+    if is_auth_only "$name"; then
+      p_type="auth-only"
+    fi
+
+    local last_used="$(get_last_used "$dir")"
+    local size="$(get_folder_size "$dir")"
+
+    printf "%-14s %-26s %-10s %-11s %-16s %-8s\n"       "$name" "$email" "$p_status" "$p_type" "$last_used" "$size"
+  done
+}
+
+stats_cmd() {
+  if [ ! -d "$BASE" ]; then
+    echo "No profiles found."
+    return 0
+  fi
+
+  echo "Profile Storage Usage:"
+  printf "%-20s %-10s %-12s\n" "PROFILE" "SIZE" "TYPE"
+  printf "%-20s %-10s %-12s\n" "-------" "----" "----"
+
+  for dir in "$BASE"/*; do
+    [ -d "$dir" ] || continue
+    local name="$(basename "$dir")"
+    [ "$name" = ".templates" ] && continue
+
+    local size="$(get_folder_size "$dir")"
+    local p_type="full"
+    if is_auth_only "$name"; then
+      p_type="auth-only"
+    fi
+
+    printf "%-20s %-10s %-12s\n" "$name" "$size" "$p_type"
+  done
+
+  echo ""
+  local total="$(get_folder_size "$BASE")"
+  echo "Total storage used: $total"
+}
+
+doctor_cmd() {
+  local errors=0
+  local warnings=0
+
+  echo "Checking multigravity-cli environment..."
+
+  local app
+  if app="$(find_cli_app)"; then
+    echo "  [OK] Antigravity CLI: Found at $app"
+  else
+    echo "  [FAIL] Antigravity CLI: 'agy' executable not found on PATH."
+    errors=$((errors + 1))
+  fi
+
+  local bin_loc
+  if bin_loc="$(command -v multigravity-cli 2>/dev/null)"; then
+    echo "  [OK] Global Command: Found at $bin_loc"
+  else
+    echo "  [WARN] Global Command: 'multigravity-cli' is not in PATH."
+    warnings=$((warnings + 1))
+  fi
+
+  if [ -d "$BASE" ]; then
+    if [ -w "$BASE" ]; then
+      echo "  [OK] Profile Storage: $BASE (writable)"
+    else
+      echo "  [FAIL] Profile Storage: $BASE is NOT writable."
+      errors=$((errors + 1))
+    fi
+  else
+    echo "  [OK] Profile Storage: $BASE (will be created on first profile)"
+  fi
+
+  local host_acc="$REAL_HOME/.gemini/google_accounts.json"
+  if [ -f "$host_acc" ]; then
+    local host_email
+    host_email="$(grep -o '"active"[[:space:]]*:[[:space:]]*"[^"]*"' "$host_acc" 2>/dev/null | cut -d'"' -f4 2>/dev/null || true)"
+    if [ -n "$host_email" ]; then
+      echo "  [OK] Default Host Account: $host_email"
+    else
+      echo "  [INFO] Default Host Account: Not signed in"
+    fi
+  else
+    echo "  [INFO] Default Host Account: No ~/.gemini/google_accounts.json found"
+  fi
+
+  local count=0
+  if [ -d "$BASE" ]; then
+    for dir in "$BASE"/*; do
+      [ -d "$dir" ] || continue
+      [ "$(basename "$dir")" = ".templates" ] && continue
+      count=$((count + 1))
+    done
+  fi
+  echo "  [OK] Total Profiles: $count configured"
+
+  echo ""
+  if [ $errors -eq 0 ]; then
+    if [ $warnings -eq 0 ]; then
+      echo "Everything looks good! Ready to use multigravity-cli."
+    else
+      echo "Multigravity CLI is ready, but check the warnings above."
+    fi
+  else
+    echo "Found $errors error(s). Please fix them before using multigravity-cli."
+    return 1
+  fi
+}
+
+template_cmd() {
+  local subcmd=${1-}
+  local tpl_dir="$(templates_dir)"
+
+  case "$subcmd" in
+    save)
+      local profile=${2-}
+      local tpl_name=${3-}
+      validate_name "$profile"
+      validate_name "$tpl_name"
+
+      local p_dir="$(profile_dir "$profile")"
+      if [ ! -d "$p_dir" ]; then
+        abort "profile '$profile' does not exist"
+      fi
+
+      mkdir -p "$tpl_dir"
+      local dest="$tpl_dir/$tpl_name"
+      if [ -e "$dest" ]; then
+        abort "template '$tpl_name' already exists"
+      fi
+
+      print_info "Saving profile '$profile' as template '$tpl_name'..."
+      cp -R "$p_dir" "$dest"
+      rm -f "$dest/.gemini/oauth_creds.json" "$dest/.gemini/google_accounts.json"
+      print_info "Template '$tpl_name' saved successfully"
+      ;;
+    list)
+      echo "Available templates:"
+      if [ ! -d "$tpl_dir" ]; then
+        echo "(none)"
+        return 0
+      fi
+      local found=false
+      for t in "$tpl_dir"/*; do
+        [ -d "$t" ] || continue
+        echo "  • $(basename "$t")"
+        found=true
+      done
+      if [ "$found" = false ]; then
+        echo "(none)"
+      fi
+      ;;
+    delete)
+      local tpl_name=${2-}
+      validate_name "$tpl_name"
+      local target="$tpl_dir/$tpl_name"
+      if [ ! -d "$target" ]; then
+        abort "template '$tpl_name' does not exist"
+      fi
+      rm -rf "$target"
+      print_info "Deleted template '$tpl_name'"
+      ;;
+    *)
+      abort "usage: multigravity-cli template <save|list|delete>"
+      ;;
+  esac
+}
+
+export_cmd() {
+  local profile=${1-}
+  local out_path=${2-}
+
+  validate_name "$profile"
+  local p_dir="$(profile_dir "$profile")"
+  if [ ! -d "$p_dir" ]; then
+    abort "profile '$profile' does not exist"
+  fi
+
+  if [ -z "$out_path" ]; then
+    out_path="./${profile}.tar.gz"
+  fi
+
+  print_info "Exporting profile '$profile' to $out_path..."
+  tar -czf "$out_path" -C "$BASE" "$profile"
+  print_info "Profile exported to $out_path"
+}
+
+import_cmd() {
+  local archive=${1-}
+  local profile_name=${2-}
+
+  if [ -z "$archive" ] || [ ! -f "$archive" ]; then
+    abort "archive file '$archive' not found"
+  fi
+
+  mkdir -p "$BASE"
+
+  if [ -z "$profile_name" ]; then
+    profile_name="$(tar -tf "$archive" | head -n 1 | cut -d'/' -f1)"
+  fi
+
+  validate_name "$profile_name"
+  local target_dir="$(profile_dir "$profile_name")"
+  if [ -e "$target_dir" ]; then
+    abort "profile '$profile_name' already exists"
+  fi
+
+  print_info "Importing profile '$profile_name' from $archive..."
+  tar -xzf "$archive" -C "$BASE"
+  print_info "Imported profile '$profile_name' successfully. Run: multigravity-cli $profile_name"
+}
+
+completion_cmd() {
+  local shell_type=${1-}
+  if [ -z "$shell_type" ]; then
+    shell_type="$(basename "${SHELL:-bash}")"
+  fi
+
+  case "$shell_type" in
+    bash)
+      cat <<'EOF_BASH'
+# multigravity-cli bash completion
+_multigravity_cli() {
+  local cur prev commands
+  COMPREPLY=()
+  cur="${COMP_WORDS[COMP_CWORD]}"
+  prev="${COMP_WORDS[COMP_CWORD-1]}"
+
+  commands="new list status whoami clone rename delete template export import doctor stats completion help"
+
+  if [ $COMP_CWORD -eq 1 ]; then
+    local profiles
+    profiles="$(multigravity-cli list --raw 2>/dev/null)"
+    COMPREPLY=( $(compgen -W "${commands} ${profiles}" -- "$cur") )
+    return 0
+  fi
+
+  case "$prev" in
+    clone|rename|delete|export|whoami)
+      local profiles="$(multigravity-cli list --raw 2>/dev/null)"
+      COMPREPLY=( $(compgen -W "${profiles}" -- "$cur") )
+      return 0
+      ;;
+    template)
+      COMPREPLY=( $(compgen -W "save list delete" -- "$cur") )
+      return 0
+      ;;
+  esac
+}
+complete -F _multigravity_cli multigravity-cli
+EOF_BASH
+      ;;
+    zsh)
+      cat <<'EOF_ZSH'
+#compdef multigravity-cli
+# multigravity-cli zsh completion
+
+_multigravity_cli() {
+  local -a commands
+  commands=(
+    'new:Create a new profile'
+    'list:List all profiles'
+    'status:Show status dashboard'
+    'whoami:Show logged in account details'
+    'clone:Clone a profile'
+    'rename:Rename a profile'
+    'delete:Delete a profile'
+    'template:Manage profile templates'
+    'export:Export profile to archive'
+    'import:Import profile from archive'
+    'doctor:Check environment health'
+    'stats:Show disk usage stats'
+    'completion:Show shell completion'
+    'help:Show help message'
+  )
+
+  local -a profiles
+  profiles=(${(f)"$(multigravity-cli list --raw 2>/dev/null)"})
+
+  _arguments     '1: :->command'     '*: :->args'
+
+  case $state in
+    command)
+      _describe 'commands' commands
+      _describe 'profiles' profiles
+      ;;
+    args)
+      case $words[2] in
+        clone|rename|delete|export|whoami)
+          _describe 'profiles' profiles
+          ;;
+        template)
+          _values 'action' 'save' 'list' 'delete'
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_multigravity_cli "$@"
+EOF_ZSH
+      ;;
+    fish)
+      cat <<'EOF_FISH'
+# multigravity-cli fish completion
+set -l commands new list status whoami clone rename delete template export import doctor stats completion help
+
+complete -c multigravity-cli -f -n "not __fish_seen_subcommand_from $commands" -a "$commands"
+complete -c multigravity-cli -f -n "not __fish_seen_subcommand_from $commands" -a "(multigravity-cli list --raw 2>/dev/null)"
+complete -c multigravity-cli -f -n "__fish_seen_subcommand_from clone rename delete export whoami" -a "(multigravity-cli list --raw 2>/dev/null)"
+complete -c multigravity-cli -f -n "__fish_seen_subcommand_from template" -a "save list delete"
+EOF_FISH
+      ;;
+    *)
+      abort "unsupported shell '$shell_type'. Supported: bash, zsh, fish"
+      ;;
+  esac
+}
+
+write_usage() {
+  cat <<'EOF_USAGE'
+Usage: multigravity-cli <command> [args...]
+
+Run multiple Antigravity CLI (agy) sessions with different accounts simultaneously.
+
+Commands:
+  <profile> [args...]              Launch Antigravity CLI with the given profile (forwards all flags)
+  new <name> [options]            Create a new CLI profile
+      --auth-only                 Share CLI settings & MCP, isolate only accounts (<50KB disk)
+      --from <template>           Create from a saved template
+      --copy-from <src>           Clone auth credentials from an existing profile
+  list                            List all profiles and their logged-in Google accounts
+  whoami [name]                   Display active account email and details for a profile
+  status                          Dashboard: running/stopped, account, type, last used, size
+  clone <src> <dest>              Duplicate a profile and its auth state
+  rename <old> <new>              Rename a profile
+  delete <name>                   Delete a profile and its isolated state
+  template save <profile> <name>  Save profile as reusable template (auth stripped)
+  template list                   List available templates
+  template delete <name>          Delete a template
+  export <name> [path]            Export profile to .tar.gz archive
+  import <archive> [name]         Import profile from archive
+  doctor                          Check environment, agy binary, and profile health
+  stats                           Show disk usage per profile
+  completion [bash|zsh|fish]      Output shell autocompletion script
+  help                            Show this help message
+
+Examples:
+  multigravity-cli new work
+  multigravity-cli work                           # Interactive TUI session
+  multigravity-cli work -p "Explain this repo"    # Single prompt
+  multigravity-cli work models                    # Check available models
+  multigravity-cli work --model gemini-3.1-pro-high
+  multigravity-cli whoami
+  multigravity-cli status
+EOF_USAGE
+}
+
+case "$cmd" in
+  new)
+    shift
+    new_profile "$@"
+    ;;
+  list)
+    shift || true
+    list_profiles "$@"
+    ;;
+  status)
+    status_cmd
+    ;;
+  whoami)
+    shift || true
+    whoami_cmd "${1-}"
+    ;;
+  clone)
+    shift
+    clone_profile "${1-}" "${2-}"
+    ;;
+  rename)
+    shift
+    rename_profile "${1-}" "${2-}"
+    ;;
+  delete)
+    shift
+    delete_profile "${1-}"
+    ;;
+  template)
+    shift
+    template_cmd "$@"
+    ;;
+  export)
+    shift
+    export_cmd "${1-}" "${2-}"
+    ;;
+  import)
+    shift
+    import_cmd "${1-}" "${2-}"
+    ;;
+  doctor)
+    doctor_cmd
+    ;;
+  stats)
+    stats_cmd
+    ;;
+  completion)
+    shift || true
+    completion_cmd "${1-}"
+    ;;
+  help | --help | -h)
+    write_usage
+    ;;
+  "")
+    write_usage
+    exit 1
+    ;;
+  *)
+    launch_profile "$@"
+    ;;
+esac

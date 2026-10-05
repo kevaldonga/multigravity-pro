@@ -1,8 +1,8 @@
 #!/bin/bash
 set -euo pipefail
 
-REPO="Pulkit7070/multigravity-pro"
-BRANCH="main"
+REPO="${MULTIGRAVITY_REPO:-kevaldonga/multigravity-pro}"
+BRANCH="${MULTIGRAVITY_BRANCH:-main}"
 RAW="https://raw.githubusercontent.com/$REPO/$BRANCH"
 INSTALL_DIR="/usr/local/bin"
 
@@ -41,10 +41,14 @@ fi
 
 echo "Installing Multigravity to $INSTALL_DIR ..."
 
-# ── download multigravity script ─────────────────────────────────────────────
-print_step "Downloading multigravity..."
+# ── download multigravity scripts ────────────────────────────────────────────
+print_step "Downloading multigravity (IDE)..."
 curl -fsSL "$RAW/multigravity" -o "$INSTALL_DIR/multigravity"
 chmod +x "$INSTALL_DIR/multigravity"
+
+print_step "Downloading multigravity-cli (CLI)..."
+curl -fsSL "$RAW/multigravity-cli" -o "$INSTALL_DIR/multigravity-cli"
+chmod +x "$INSTALL_DIR/multigravity-cli"
 
 # ── download macOS icon ──────────────────────────────────────────────────────
 if [ "$PLATFORM" = "darwin" ]; then
@@ -55,15 +59,20 @@ fi
 echo ""
 echo "✓ Multigravity installed successfully!"
 echo ""
-echo "Usage:"
+echo "Usage (Antigravity IDE):"
 echo "  multigravity help"
 echo "  multigravity new <profile-name>"
 echo "  multigravity <profile-name>"
+echo ""
+echo "Usage (Antigravity CLI):"
+echo "  multigravity-cli help"
+echo "  multigravity-cli new <profile-name>"
+echo "  multigravity-cli <profile-name>"
 
 if [ "$PLATFORM" = "linux" ] && ! command -v antigravity &>/dev/null && [ ! -x /usr/share/antigravity/antigravity ]; then
   echo ""
   echo "Note:"
-  echo "  Antigravity was not found on this machine."
+  echo "  Antigravity IDE was not found on this machine."
   echo "  Install Antigravity for Linux and ensure 'antigravity' is on PATH,"
   echo "  or launch Multigravity with MULTIGRAVITY_APP=/path/to/antigravity."
 fi
