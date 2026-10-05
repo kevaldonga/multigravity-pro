@@ -486,6 +486,149 @@ function Invoke-DeleteProfile {
     }
 }
 
+function Invoke-TemplateSave {
+    param($PROFILE, $TPL_NAME)
+    Validate-Name $PROFILE
+    Validate-Name $TPL_NAME
+
+    $PROFILE_DIR = "$BASE\$PROFILE"
+    if (!(Test-Path $PROFILE_DIR)) {
+        Write-Error "Error: profile '$PROFILE' does not exist"
+        exit 1
+    }
+
+    $tplDir = Get-TemplatesDir
+    $tplPath = "$tplDir\$TPL_NAME"
+
+    if (Test-Path $tplPath) {
+        Write-Error "Error: template '$TPL_NAME' already exists"
+        exit 1
+    }
+
+    New-Item -ItemType Directory -Force -Path $tplDir | Out-Null
+    Write-Host "Saving profile '$PROFILE' as template '$TPL_NAME'..."
+    Copy-Item -Path $PROFILE_DIR -Destination $tplPath -Recurse
+
+    # Strip auth credentials from template for security
+    foreach ($f in @("google_accounts.json", "oauth_creds.json")) {
+        $tf = "$tplPath\.gemini\$f"
+        if (Test-Path $tf) { Remove-Item $tf -Force }
+    }
+
+    Write-Host "Template '$TPL_NAME' saved"
+}
+
+function Invoke-TemplateList {
+    $tplDir = Get-TemplatesDir
+    Write-Host "Available templates:"
+
+    if (!(Test-Path $tplDir)) {
+        Write-Host "  (none)"
+        return
+    }
+
+    $templates = Get-ChildItem -Directory -Path $tplDir -ErrorAction SilentlyContinue
+    if (!$templates -or $templates.Count -eq 0) {
+        Write-Host "  (none)"
+        return
+    }
+
+    foreach ($t in $templates) {
+        $size = Get-FolderSize $t.FullName
+        Write-Host ("  {0}  ({1})" -f $t.Name, $size)
+    }
+}
+
+function Invoke-TemplateDelete {
+    param($TPL_NAME)
+    Validate-Name $TPL_NAME
+
+    $tplPath = "$(Get-TemplatesDir)\$TPL_NAME"
+    if (!(Test-Path $tplPath)) {
+        Write-Error "Error: template '$TPL_NAME' does not exist"
+        exit 1
+    }
+
+    Remove-Item -Recurse -Force $tplPath
+    Write-Host "Deleted template '$TPL_NAME'"
+}
+
+function Invoke-ExportProfile {
+    param($PROFILE, $OutputPath)
+    Validate-Name $PROFILE
+
+    $PROFILE_DIR = "$BASE\$PROFILE"
+    if (!(Test-Path $PROFILE_DIR)) {
+        Write-Error "Error: profile '$PROFILE' does not exist"
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($OutputPath)) {
+        $OutputPath = ".\$PROFILE.zip"
+    }
+
+    Write-Host "Exporting profile '$PROFILE'..."
+    Compress-Archive -Path $PROFILE_DIR -DestinationPath $OutputPath -Force
+    Write-Host "Exported to $OutputPath"
+}
+
+function Invoke-ImportProfile {
+    param($ArchivePath, $PROFILE)
+
+    if ([string]::IsNullOrWhiteSpace($ArchivePath)) {
+        Write-Error "Error: usage: multigravity-cli import <archive> [profile-name]"
+        exit 1
+    }
+
+    if (!(Test-Path $ArchivePath)) {
+        Write-Error "Error: file '$ArchivePath' not found"
+        exit 1
+    }
+
+    if ([string]::IsNullOrWhiteSpace($PROFILE)) {
+        $PROFILE = [System.IO.Path]::GetFileNameWithoutExtension($ArchivePath)
+    }
+
+    Validate-Name $PROFILE
+    $PROFILE_DIR = "$BASE\$PROFILE"
+    if (Test-Path $PROFILE_DIR) {
+        Write-Error "Error: profile '$PROFILE' already exists"
+        exit 1
+    }
+
+    Write-Host "Importing profile as '$PROFILE'..."
+    Expand-Archive -Path $ArchivePath -DestinationPath $BASE -Force
+
+    $unpackedDir = "$BASE\$([System.IO.Path]::GetFileNameWithoutExtension($ArchivePath))"
+    if (($unpackedDir -ne $PROFILE_DIR) -and (Test-Path $unpackedDir)) {
+        Rename-Item -Path $unpackedDir -NewName $PROFILE
+    }
+
+    Write-Host "Imported profile '$PROFILE'"
+}
+
+function Invoke-ProfileStats {
+    if (!(Test-Path $BASE)) {
+        Write-Host "No profiles found."
+        return
+    }
+
+    Write-Host "Profile Storage Usage:"
+    Write-Host ("{0,-20} {1,-10} {2,-12}" -f "PROFILE", "SIZE", "TYPE")
+    Write-Host ("{0,-20} {1,-10} {2,-12}" -f "-------", "----", "----")
+
+    $profiles = Get-ChildItem -Directory -Path $BASE | Where-Object { $_.Name -ne ".templates" }
+    foreach ($p in $profiles) {
+        $size = Get-FolderSize $p.FullName
+        $type = if (Test-AuthOnly $p.Name) { "auth-only" } else { "full" }
+        Write-Host ("{0,-20} {1,-10} {2,-12}" -f $p.Name, $size, $type)
+    }
+
+    Write-Host ""
+    $total = Get-FolderSize $BASE
+    Write-Host "Total usage: $total"
+}
+
 # Dispatch
 switch ($cmd) {
     "new" {
@@ -512,6 +655,26 @@ switch ($cmd) {
     }
     "delete" {
         Invoke-DeleteProfile $arg1
+    }
+    "template" {
+        switch ($arg1) {
+            "save" { Invoke-TemplateSave $arg2 $ForwardArgs[0] }
+            "list" { Invoke-TemplateList }
+            "delete" { Invoke-TemplateDelete $arg2 }
+            default {
+                Write-Error "Error: usage: multigravity-cli template <save|list|delete>"
+                exit 1
+            }
+        }
+    }
+    "export" {
+        Invoke-ExportProfile $arg1 $arg2
+    }
+    "import" {
+        Invoke-ImportProfile $arg1 $arg2
+    }
+    "stats" {
+        Invoke-ProfileStats
     }
     "doctor" {
         Invoke-DoctorCli

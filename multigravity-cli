@@ -759,7 +759,13 @@ import_cmd() {
   fi
 
   print_info "Importing profile '$profile_name' from $archive..."
+  local top_dir
+  top_dir="$(tar -tf "$archive" | head -n 1 | cut -d'/' -f1)"
+
   tar -xzf "$archive" -C "$BASE"
+  if [ -n "$top_dir" ] && [ "$top_dir" != "$profile_name" ] && [ -d "$BASE/$top_dir" ]; then
+    mv "$BASE/$top_dir" "$target_dir"
+  fi
   print_info "Imported profile '$profile_name' successfully. Run: multigravity-cli $profile_name"
 }
 
