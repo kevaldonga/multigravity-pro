@@ -231,9 +231,21 @@ create_auth_only_layout() {
 
   # Symlink shared settings from default installation
   if [ -d "$default_data/User" ]; then
-    for item in settings.json keybindings.json snippets; do
+    for item in settings.json keybindings.json snippets chatLanguageModels.json workspaceStorage History; do
       local src="$default_data/User/$item"
       local dest="$data_dir/User/$item"
+      if [ -e "$src" ] && [ ! -e "$dest" ]; then
+        ln -s "$src" "$dest"
+      fi
+    done
+  fi
+
+  # Symlink .gemini chat histories, brain artifacts, and models so existing chats appear
+  if [ -d "$HOME/.gemini" ]; then
+    mkdir -p "$profile_path/.gemini"
+    for item in antigravity antigravity-cli history rules skills commands projects.json; do
+      local src="$HOME/.gemini/$item"
+      local dest="$profile_path/.gemini/$item"
       if [ -e "$src" ] && [ ! -e "$dest" ]; then
         ln -s "$src" "$dest"
       fi
@@ -243,6 +255,7 @@ create_auth_only_layout() {
   # Symlink extensions to default (shared, not copied)
   local ext_dir
   ext_dir="$(extensions_dir "$profile_path")"
+  mkdir -p "$(dirname "$ext_dir")"
   if [ -d "$default_ext" ]; then
     # Remove the empty dir created by mkdir, replace with symlink
     rmdir "$ext_dir" 2>/dev/null || true

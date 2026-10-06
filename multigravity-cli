@@ -171,10 +171,28 @@ create_auth_only_layout() {
   mkdir -p "$profile_path"
   touch "$profile_path/.auth-only"
 
-  mkdir -p     "$profile_path/.gemini/config"     "$profile_path/.gemini/antigravity-cli/conversations"     "$profile_path/.gemini/antigravity-cli/brain"     "$profile_path/.gemini/antigravity-cli/cache"     "$profile_path/.gemini/antigravity-cli/log"     "$profile_path/.cache"
+  mkdir -p "$profile_path/.gemini/config" "$profile_path/.gemini/antigravity-cli" "$profile_path/.cache"
 
   # Bridge dev dotfiles
   bridge_dotfiles "$profile_path"
+
+  # Symlink chat histories, artifacts, and knowledge so existing chats appear
+  for item in conversations brain knowledge; do
+    local src="$REAL_HOME/.gemini/antigravity-cli/$item"
+    local dest="$profile_path/.gemini/antigravity-cli/$item"
+    if [ -d "$src" ] && [ ! -e "$dest" ]; then
+      ln -s "$src" "$dest"
+    fi
+  done
+
+  # Symlink skills, rules, commands, history, and projects
+  for item in antigravity history rules skills commands projects.json; do
+    local src="$REAL_HOME/.gemini/$item"
+    local dest="$profile_path/.gemini/$item"
+    if [ -e "$src" ] && [ ! -e "$dest" ]; then
+      ln -s "$src" "$dest"
+    fi
+  done
 
   # Share CLI settings from default via symlink
   local default_cli_settings="$REAL_HOME/.gemini/antigravity-cli/settings.json"
