@@ -96,6 +96,58 @@ EOF_WRAPPER
   printf '%s\n' "$wrapper"
 }
 
+ensure_browser_shims() {
+  local dir="${REAL_HOME:-$HOME}/.local/share/multigravity/bin"
+  mkdir -p "$dir"
+
+  local xdg_shim="$dir/xdg-open"
+  if [ ! -f "$xdg_shim" ] || [ ! -x "$xdg_shim" ]; then
+    cat <<'EOF_XDG' > "$xdg_shim"
+#!/usr/bin/env sh
+export HOME="${MULTIGRAVITY_REAL_HOME:-$HOME}"
+export XDG_DATA_HOME="${MULTIGRAVITY_REAL_XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_CONFIG_HOME="${MULTIGRAVITY_REAL_XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_CACHE_HOME="${MULTIGRAVITY_REAL_XDG_CACHE_HOME:-$HOME/.cache}"
+if [ -n "${MULTIGRAVITY_REAL_DBUS-}" ]; then
+  export DBUS_SESSION_BUS_ADDRESS="$MULTIGRAVITY_REAL_DBUS"
+fi
+for p in /usr/bin/xdg-open /usr/local/bin/xdg-open /bin/xdg-open; do
+  if [ -x "$p" ] && [ "$p" != "$0" ]; then
+    exec "$p" "$@"
+  fi
+done
+if command -v gio >/dev/null 2>&1; then
+  exec gio open "$@"
+elif command -v firefox >/dev/null 2>&1; then
+  exec firefox "$@"
+fi
+EOF_XDG
+    chmod +x "$xdg_shim"
+  fi
+
+  local ff_shim="$dir/firefox"
+  if [ ! -f "$ff_shim" ] || [ ! -x "$ff_shim" ]; then
+    cat <<'EOF_FF' > "$ff_shim"
+#!/usr/bin/env sh
+export HOME="${MULTIGRAVITY_REAL_HOME:-$HOME}"
+export XDG_DATA_HOME="${MULTIGRAVITY_REAL_XDG_DATA_HOME:-$HOME/.local/share}"
+export XDG_CONFIG_HOME="${MULTIGRAVITY_REAL_XDG_CONFIG_HOME:-$HOME/.config}"
+export XDG_CACHE_HOME="${MULTIGRAVITY_REAL_XDG_CACHE_HOME:-$HOME/.cache}"
+if [ -n "${MULTIGRAVITY_REAL_DBUS-}" ]; then
+  export DBUS_SESSION_BUS_ADDRESS="$MULTIGRAVITY_REAL_DBUS"
+fi
+for p in /usr/bin/firefox /usr/lib/firefox/firefox /usr/local/bin/firefox /bin/firefox; do
+  if [ -x "$p" ] && [ "$p" != "$0" ]; then
+    exec "$p" "$@"
+  fi
+done
+EOF_FF
+    chmod +x "$ff_shim"
+  fi
+
+  printf '%s\n' "$dir"
+}
+
 is_auth_only() {
   [ -f "$(profile_dir "$1")/.auth-only" ]
 }
@@ -218,13 +270,24 @@ bridge_dotfiles() {
     fi
   done
 
-  # Symlink git config in .config if present
-  if [ -d "$REAL_HOME/.config/git" ]; then
-    mkdir -p "$profile_path/.config"
-    if [ ! -e "$profile_path/.config/git" ] && [ ! -L "$profile_path/.config/git" ]; then
-      ln -s "$REAL_HOME/.config/git" "$profile_path/.config/git"
+  # Symlink browser profiles so browsers find existing user profiles and logins
+  for browser_dir in .mozilla; do
+    local src="$REAL_HOME/$browser_dir"
+    local dest="$profile_path/$browser_dir"
+    if [ -e "$src" ] && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+      ln -s "$src" "$dest"
     fi
-  fi
+  done
+
+  # Symlink dev and browser configs in .config if present
+  mkdir -p "$profile_path/.config"
+  for cfg in git mozilla google-chrome chromium BraveSoftware microsoft-edge; do
+    local src="$REAL_HOME/.config/$cfg"
+    local dest="$profile_path/.config/$cfg"
+    if [ -d "$src" ] && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+      ln -s "$src" "$dest"
+    fi
+  done
 }
 
 create_profile_layout() {
@@ -530,6 +593,16 @@ launch_profile() {
 
       local silent_dbus
       silent_dbus="$(ensure_silent_dbus)"
+
+      local shims_dir
+      shims_dir="$(ensure_browser_shims)"
+      export PATH="$shims_dir:$PATH"
+
+      export MULTIGRAVITY_REAL_HOME="$REAL_HOME"
+      export MULTIGRAVITY_REAL_DBUS="${DBUS_SESSION_BUS_ADDRESS-}"
+      export MULTIGRAVITY_REAL_XDG_DATA_HOME="${XDG_DATA_HOME:-$REAL_HOME/.local/share}"
+      export MULTIGRAVITY_REAL_XDG_CONFIG_HOME="${XDG_CONFIG_HOME:-$REAL_HOME/.config}"
+      export MULTIGRAVITY_REAL_XDG_CACHE_HOME="${XDG_CACHE_HOME:-$REAL_HOME/.cache}"
 
       export HOME="$profile_path"
       export XDG_CONFIG_HOME="$profile_path/.config"
