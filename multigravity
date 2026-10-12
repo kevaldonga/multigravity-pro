@@ -519,8 +519,8 @@ launch_profile() {
       export XDG_RUNTIME_DIR="$profile_path/.run"
 
       exec dbus-run-session -- bash -c '
-        eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'")
-        eval $(gnome-keyring-daemon --start --components=secrets)
+        eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'" 2>/dev/null) >/dev/null 2>&1
+        eval $(gnome-keyring-daemon --start --components=secrets 2>/dev/null) >/dev/null 2>&1
         "'"$app"'" \
           --user-data-dir "'"$data_dir"'" \
           --extensions-dir "'"$ext_dir"'" \
