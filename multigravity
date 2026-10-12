@@ -79,6 +79,23 @@ templates_dir() {
   printf '%s/.templates\n' "$BASE"
 }
 
+ensure_silent_dbus() {
+  local dir="${XDG_DATA_HOME:-$REAL_HOME/.local/share}/multigravity"
+  local wrapper="$dir/dbus-silent-daemon"
+  local dbus_bin
+  dbus_bin="$(command -v dbus-daemon 2>/dev/null || echo "/usr/bin/dbus-daemon")"
+
+  mkdir -p "$dir"
+  if [ ! -f "$wrapper" ] || [ ! -x "$wrapper" ]; then
+    cat <<EOF_WRAPPER > "$wrapper"
+#!/usr/bin/env sh
+exec "$dbus_bin" "\$@" >/dev/null 2>&1
+EOF_WRAPPER
+    chmod +x "$wrapper"
+  fi
+  printf '%s\n' "$wrapper"
+}
+
 is_auth_only() {
   [ -f "$(profile_dir "$1")/.auth-only" ]
 }
@@ -511,6 +528,9 @@ launch_profile() {
       mkdir -p "$keyring_dir" "$keyring_run"
       chmod 700 "$profile_path/.run" "$keyring_run" 2>/dev/null || true
 
+      local silent_dbus
+      silent_dbus="$(ensure_silent_dbus)"
+
       export HOME="$profile_path"
       export XDG_CONFIG_HOME="$profile_path/.config"
       export XDG_CACHE_HOME="$profile_path/.cache"
@@ -518,7 +538,7 @@ launch_profile() {
       export XDG_STATE_HOME="$profile_path/.local/state"
       export XDG_RUNTIME_DIR="$profile_path/.run"
 
-      exec dbus-run-session -- bash -c '
+      exec dbus-run-session --dbus-daemon="$silent_dbus" -- bash -c '
         eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'" 2>/dev/null) >/dev/null 2>&1
         eval $(gnome-keyring-daemon --start --components=secrets 2>/dev/null) >/dev/null 2>&1
         "'"$app"'" \
