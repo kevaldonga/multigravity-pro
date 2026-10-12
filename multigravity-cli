@@ -276,9 +276,12 @@ get_profile_email() {
   fi
 
   if [ -f "$p_dir/.local/share/keyrings/login.keyring" ]; then
+    mkdir -p "$p_dir/.run/keyring"
+    chmod 700 "$p_dir/.run" "$p_dir/.run/keyring" 2>/dev/null || true
     local email
     email="$(HOME="$p_dir" XDG_DATA_HOME="$p_dir/.local/share" XDG_RUNTIME_DIR="$p_dir/.run" dbus-run-session -- bash -c '
       eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$p_dir"'/.run/keyring" 2>/dev/null) >/dev/null 2>&1
+      eval $(gnome-keyring-daemon --start --components=secrets 2>/dev/null) >/dev/null 2>&1
       python3 -c "
 import secretstorage, json, base64, sys
 try:
@@ -351,6 +354,7 @@ launch_profile() {
 
     exec dbus-run-session -- bash -c '
       eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'")
+      eval $(gnome-keyring-daemon --start --components=secrets)
       "'"$app"'" "$@"
       EXIT_CODE=$?
       python3 -c "

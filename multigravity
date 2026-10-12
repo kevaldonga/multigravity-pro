@@ -4,6 +4,7 @@ set -euo pipefail
 shopt -s nullglob
 
 BASE="${MULTIGRAVITY_HOME:-$HOME/AntigravityProfiles}"
+REAL_HOME="$HOME"
 cmd="${1-}"
 
 abort() {
@@ -188,6 +189,27 @@ require_app() {
   printf '%s\n' "$app"
 }
 
+bridge_dotfiles() {
+  local profile_path=$1
+
+  # Symlink standard developer configs so git, ssh, and shell work seamlessly
+  for dotfile in .gitconfig .ssh; do
+    local src="$REAL_HOME/$dotfile"
+    local dest="$profile_path/$dotfile"
+    if [ -e "$src" ] && [ ! -e "$dest" ] && [ ! -L "$dest" ]; then
+      ln -s "$src" "$dest"
+    fi
+  done
+
+  # Symlink git config in .config if present
+  if [ -d "$REAL_HOME/.config/git" ]; then
+    mkdir -p "$profile_path/.config"
+    if [ ! -e "$profile_path/.config/git" ] && [ ! -L "$profile_path/.config/git" ]; then
+      ln -s "$REAL_HOME/.config/git" "$profile_path/.config/git"
+    fi
+  fi
+}
+
 create_profile_layout() {
   local profile_path=$1
 
@@ -241,15 +263,25 @@ create_auth_only_layout() {
   fi
 
   # Symlink .gemini chat histories, brain artifacts, and models so existing chats appear
-  if [ -d "$HOME/.gemini" ]; then
+  if [ -d "$REAL_HOME/.gemini" ]; then
     mkdir -p "$profile_path/.gemini"
-    for item in antigravity antigravity-cli history rules skills commands projects.json; do
-      local src="$HOME/.gemini/$item"
+    for item in history rules skills commands projects.json; do
+      local src="$REAL_HOME/.gemini/$item"
       local dest="$profile_path/.gemini/$item"
       if [ -e "$src" ] && [ ! -e "$dest" ]; then
         ln -s "$src" "$dest"
       fi
     done
+    if [ -d "$REAL_HOME/.gemini/antigravity" ]; then
+      mkdir -p "$profile_path/.gemini/antigravity"
+      for item in conversations brain knowledge html_artifacts; do
+        local src="$REAL_HOME/.gemini/antigravity/$item"
+        local dest="$profile_path/.gemini/antigravity/$item"
+        if [ -e "$src" ] && [ ! -e "$dest" ]; then
+          ln -s "$src" "$dest"
+        fi
+      done
+    fi
   fi
 
   # Symlink extensions to default (shared, not copied)
@@ -452,7 +484,13 @@ launch_profile() {
     abort "profile '$profile' does not exist. Run: multigravity new $profile"
   fi
 
-  create_profile_layout "$profile_path"
+  if is_auth_only "$profile"; then
+    create_auth_only_layout "$profile_path"
+  else
+    create_profile_layout "$profile_path"
+  fi
+
+  bridge_dotfiles "$profile_path"
 
   app="$(require_app)"
   data_dir="$(user_data_dir "$profile_path")"
@@ -468,15 +506,26 @@ launch_profile() {
         "$@"
       ;;
     linux)
-      HOME="$profile_path" \
-      XDG_CONFIG_HOME="$profile_path/.config" \
-      XDG_CACHE_HOME="$profile_path/.cache" \
-      XDG_DATA_HOME="$profile_path/.local/share" \
-      XDG_STATE_HOME="$profile_path/.local/state" \
-      "$app" \
-        --user-data-dir "$data_dir" \
-        --extensions-dir "$ext_dir" \
-        "$@"
+      local keyring_dir="$profile_path/.local/share/keyrings"
+      local keyring_run="$profile_path/.run/keyring"
+      mkdir -p "$keyring_dir" "$keyring_run"
+      chmod 700 "$profile_path/.run" "$keyring_run" 2>/dev/null || true
+
+      export HOME="$profile_path"
+      export XDG_CONFIG_HOME="$profile_path/.config"
+      export XDG_CACHE_HOME="$profile_path/.cache"
+      export XDG_DATA_HOME="$profile_path/.local/share"
+      export XDG_STATE_HOME="$profile_path/.local/state"
+      export XDG_RUNTIME_DIR="$profile_path/.run"
+
+      exec dbus-run-session -- bash -c '
+        eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'")
+        eval $(gnome-keyring-daemon --start --components=secrets)
+        "'"$app"'" \
+          --user-data-dir "'"$data_dir"'" \
+          --extensions-dir "'"$ext_dir"'" \
+          "$@"
+      ' -- "$@"
       ;;
   esac
 }
