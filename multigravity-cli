@@ -39,13 +39,11 @@ platform() {
 }
 
 profile_dir() {
-  printf '%s/%s
-' "$BASE" "$1"
+  printf '%s/%s\n' "$BASE" "$1"
 }
 
 templates_dir() {
-  printf '%s/.templates
-' "$BASE"
+  printf '%s/.templates\n' "$BASE"
 }
 
 is_auth_only() {
@@ -174,38 +172,69 @@ create_auth_only_layout() {
   mkdir -p "$profile_path/.gemini/config" "$profile_path/.gemini/antigravity-cli" "$profile_path/.cache"
 
   # Bridge dev dotfiles
+  # Bridge dev dotfiles
   bridge_dotfiles "$profile_path"
 
-  # Symlink chat histories, artifacts, and knowledge so existing chats appear
-  for item in conversations brain knowledge; do
+  # Symlink chat histories, database summaries, prompt history, artifacts, and knowledge so existing chats appear
+  for item in conversations brain knowledge conversation_summaries.db history.jsonl; do
     local src="$REAL_HOME/.gemini/antigravity-cli/$item"
     local dest="$profile_path/.gemini/antigravity-cli/$item"
-    if [ -d "$src" ] && [ ! -e "$dest" ]; then
-      ln -s "$src" "$dest"
+    if [ -e "$src" ]; then
+      if [ -L "$dest" ]; then
+        :
+      elif [ -e "$dest" ]; then
+        rm -rf "$dest"
+        ln -s "$src" "$dest"
+      else
+        ln -s "$src" "$dest"
+      fi
     fi
   done
+  # Clean up any local SQLite journal files so the shared DB is cleanly accessed
+  rm -f "$profile_path/.gemini/antigravity-cli/conversation_summaries.db-shm" "$profile_path/.gemini/antigravity-cli/conversation_summaries.db-wal" 2>/dev/null || true
 
   # Symlink skills, rules, commands, history, and projects
   for item in antigravity history rules skills commands projects.json; do
     local src="$REAL_HOME/.gemini/$item"
     local dest="$profile_path/.gemini/$item"
-    if [ -e "$src" ] && [ ! -e "$dest" ]; then
-      ln -s "$src" "$dest"
+    if [ -e "$src" ]; then
+      if [ -L "$dest" ]; then
+        :
+      elif [ -e "$dest" ]; then
+        rm -rf "$dest"
+        ln -s "$src" "$dest"
+      else
+        ln -s "$src" "$dest"
+      fi
     fi
   done
 
   # Share CLI settings from default via symlink
   local default_cli_settings="$REAL_HOME/.gemini/antigravity-cli/settings.json"
   local target_cli_settings="$profile_path/.gemini/antigravity-cli/settings.json"
-  if [ -f "$default_cli_settings" ] && [ ! -e "$target_cli_settings" ]; then
-    ln -s "$default_cli_settings" "$target_cli_settings"
+  if [ -f "$default_cli_settings" ]; then
+    if [ -L "$target_cli_settings" ]; then
+      :
+    elif [ -e "$target_cli_settings" ]; then
+      rm -f "$target_cli_settings"
+      ln -s "$default_cli_settings" "$target_cli_settings"
+    else
+      ln -s "$default_cli_settings" "$target_cli_settings"
+    fi
   fi
 
   # Share MCP configuration via symlink
   local default_mcp="$REAL_HOME/.gemini/config/mcp_config.json"
   local target_mcp="$profile_path/.gemini/config/mcp_config.json"
-  if [ -f "$default_mcp" ] && [ ! -e "$target_mcp" ]; then
-    ln -s "$default_mcp" "$target_mcp"
+  if [ -f "$default_mcp" ]; then
+    if [ -L "$target_mcp" ]; then
+      :
+    elif [ -e "$target_mcp" ]; then
+      rm -f "$target_mcp"
+      ln -s "$default_mcp" "$target_mcp"
+    else
+      ln -s "$default_mcp" "$target_mcp"
+    fi
   fi
 
   # Seed onboarding state
@@ -226,12 +255,51 @@ get_profile_email() {
   local profile=$1
   local p_dir
   p_dir="$(profile_dir "$profile")"
-  local acc_file="$p_dir/.gemini/google_accounts.json"
 
+  if [ -f "$p_dir/.profile_email" ]; then
+    local email
+    email="$(head -n 1 "$p_dir/.profile_email" 2>/dev/null || true)"
+    if [ -n "$email" ]; then
+      printf '%s\n' "$email"
+      return 0
+    fi
+  fi
+
+  local acc_file="$p_dir/.gemini/google_accounts.json"
   if [ -f "$acc_file" ]; then
     local email
     email="$(grep -o '"active"[[:space:]]*:[[:space:]]*"[^"]*"' "$acc_file" 2>/dev/null | cut -d'"' -f4 2>/dev/null || true)"
     if [ -n "$email" ]; then
+      printf '%s\n' "$email"
+      return 0
+    fi
+  fi
+
+  if [ -f "$p_dir/.local/share/keyrings/login.keyring" ]; then
+    local email
+    email="$(HOME="$p_dir" XDG_DATA_HOME="$p_dir/.local/share" XDG_RUNTIME_DIR="$p_dir/.run" dbus-run-session -- bash -c '
+      eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$p_dir"'/.run/keyring" 2>/dev/null) >/dev/null 2>&1
+      python3 -c "
+import secretstorage, json, base64, sys
+try:
+    bus = secretstorage.dbus_init()
+    for item in secretstorage.get_default_collection(bus).get_all_items():
+        if item.get_attributes().get(\"service\") == \"gemini\":
+            data = json.loads(item.get_secret().decode(\"utf-8\"))
+            if \"id_token\" in data and data[\"id_token\"]:
+                parts = data[\"id_token\"].split(\".\")
+                if len(parts) >= 2:
+                    payload = parts[1] + \"=\" * (-len(parts[1]) % 4)
+                    e = json.loads(base64.urlsafe_b64decode(payload)).get(\"email\")
+                    if e:
+                        print(e.strip())
+                        sys.exit(0)
+except Exception:
+    pass
+sys.exit(1)
+" 2>/dev/null' 2>/dev/null | grep -E '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' | head -n 1 || true)"
+    if [ -n "$email" ]; then
+      printf '%s\n' "$email" > "$p_dir/.profile_email" 2>/dev/null || true
       printf '%s\n' "$email"
       return 0
     fi
@@ -272,7 +340,41 @@ launch_profile() {
   export MULTIGRAVITY_CLI_PROFILE="$profile"
   export HOME="$profile_path"
 
-  exec "$app" "$@"
+  if [ "$(platform)" = "linux" ]; then
+    local keyring_dir="$profile_path/.local/share/keyrings"
+    local keyring_run="$profile_path/.run/keyring"
+    mkdir -p "$keyring_dir" "$keyring_run"
+    chmod 700 "$profile_path/.run" "$keyring_run" 2>/dev/null || true
+
+    export XDG_DATA_HOME="$profile_path/.local/share"
+    export XDG_RUNTIME_DIR="$profile_path/.run"
+
+    exec dbus-run-session -- bash -c '
+      eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'")
+      "'"$app"'" "$@"
+      EXIT_CODE=$?
+      python3 -c "
+import secretstorage, json, base64
+try:
+    bus = secretstorage.dbus_init()
+    for item in secretstorage.get_default_collection(bus).get_all_items():
+        if item.get_attributes().get(\"service\") == \"gemini\":
+            data = json.loads(item.get_secret().decode(\"utf-8\"))
+            if \"id_token\" in data and data[\"id_token\"]:
+                parts = data[\"id_token\"].split(\".\")
+                if len(parts) >= 2:
+                    payload = parts[1] + \"=\" * (-len(parts[1]) % 4)
+                    email = json.loads(base64.urlsafe_b64decode(payload)).get(\"email\")
+                    if email:
+                        open(\"'"$profile_path"'/.profile_email\", \"w\").write(email.strip() + \"\n\")
+except Exception:
+    pass
+" 2>/dev/null || true
+      exit $EXIT_CODE
+    ' -- "$@"
+  else
+    exec "$app" "$@"
+  fi
 }
 
 list_profiles() {
@@ -315,8 +417,7 @@ list_profiles() {
         if is_auth_only "$p"; then
           tag=" [auth-only]"
         fi
-        printf '  • %-16s %-30s%s
-' "$p" "$email" "$tag"
+        printf '  • %-16s %-30s%s\n' "$p" "$email" "$tag"
       done <<< "$(printf '%s' "$entries" | sort)"
     fi
   fi
@@ -533,8 +634,7 @@ is_profile_running() {
     for pid in $(pgrep -f "agy" 2>/dev/null || true); do
       [ "$pid" = "$$" ] && continue
       if [ -d "/proc/$pid" ]; then
-        if tr ' ' '
-' < "/proc/$pid/environ" 2>/dev/null | grep -q "^HOME=$p_dir$"; then
+        if grep -z -q "^HOME=$p_dir$" "/proc/$pid/environ" 2>/dev/null; then
           return 0
         fi
       fi
