@@ -928,6 +928,9 @@ generate_completion() {
       cat <<'EOF'
 #compdef multigravity
 _multigravity() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
     local -a commands
     commands=(
         'new:Create a new profile'
@@ -939,27 +942,66 @@ _multigravity() {
         'template:Manage profile templates (save, list, delete)'
         'export:Export a profile to tar.gz'
         'import:Import a profile from tar.gz'
-        'update:Update multigravity'
+        'update:Update multigravity to latest version'
         'doctor:Run system diagnosis'
         'stats:Show profile storage usage'
         'completion:Setup shell completion'
         'help:Show help'
     )
-    local curcontext="$curcontext" state line
-    _arguments -C '1: :->command' '*: :->args'
-    case $state in
-        command)
-            _describe -t commands 'multigravity command' commands
+
+    _arguments -C \
+        '1:command or profile:->first_arg' \
+        '*: :->args' && return 0
+
+    case "$state" in
+        first_arg)
+            _describe -t commands 'multigravity commands' commands
             local -a profiles
             profiles=($(multigravity list --raw 2>/dev/null))
-            (( ${#profiles} > 0 )) && _describe -t profiles 'profile' profiles
+            (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
             ;;
         args)
-            case $line[1] in
-                rename|delete|clone|help)
+            case "$words[2]" in
+                new)
+                    _arguments \
+                        '--auth-only[Share extensions & settings, isolate only accounts]' \
+                        '--from[Create from a saved template]:template:->templates'
+                    if [[ "$state" == "templates" ]]; then
+                        local -a templates
+                        templates=($(multigravity template list --raw 2>/dev/null))
+                        (( ${#templates} > 0 )) && _describe -t templates 'templates' templates
+                    fi
+                    ;;
+                delete|rename|clone|export|help)
                     local -a profiles
                     profiles=($(multigravity list --raw 2>/dev/null))
-                    (( ${#profiles} > 0 )) && _describe -t profiles 'profile' profiles
+                    (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+                    ;;
+                template)
+                    case "$words[3]" in
+                        save)
+                            local -a profiles
+                            profiles=($(multigravity list --raw 2>/dev/null))
+                            (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+                            ;;
+                        delete)
+                            local -a templates
+                            templates=($(multigravity template list --raw 2>/dev/null))
+                            (( ${#templates} > 0 )) && _describe -t templates 'templates' templates
+                            ;;
+                        *)
+                            local -a tpl_actions
+                            tpl_actions=(
+                                'save:Save profile as reusable template'
+                                'list:List available templates'
+                                'delete:Delete a template'
+                            )
+                            _describe -t tpl_actions 'template actions' tpl_actions
+                            ;;
+                    esac
+                    ;;
+                *)
+                    _files
                     ;;
             esac
             ;;
@@ -971,24 +1013,66 @@ EOF
     bash)
       cat <<'EOF'
 _multigravity_completions() {
-    local cur prev opts
-    COMPREPLY=()
-    cur="${COMP_WORDS[COMP_CWORD]}"
-    prev="${COMP_WORDS[COMP_CWORD-1]}"
-    opts="new list status rename delete clone template export import update doctor stats completion help"
- pocket
+    local cur prev words cword
+    if type _init_completion >/dev/null 2>&1; then
+        _init_completion || return
+    else
+        COMPREPLY=()
+        cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+        words=("${COMP_WORDS[@]}")
+        cword=$COMP_CWORD
+    fi
 
-    if [[ ${COMP_CWORD} -eq 1 ]] ; then
-        local profiles=$(multigravity list --raw 2>/dev/null)
-        COMPREPLY=( $(compgen -W "${opts} ${profiles}" -- ${cur}) )
+    local opts="new list status rename delete clone template export import update doctor stats completion help"
+
+    if [[ ${cword} -eq 1 ]]; then
+        local profiles
+        profiles=$(multigravity list --raw 2>/dev/null)
+        COMPREPLY=( $(compgen -W "${opts} ${profiles}" -- "${cur}") )
         return 0
     fi
 
-    case "${prev}" in
-        delete|rename|clone)
-            local profiles=$(multigravity list --raw 2>/dev/null)
-            COMPREPLY=( $(compgen -W "${profiles}" -- ${cur}) )
+    case "${words[1]}" in
+        new)
+            case "${prev}" in
+                --from)
+                    local templates
+                    templates=$(multigravity template list --raw 2>/dev/null)
+                    COMPREPLY=( $(compgen -W "${templates}" -- "${cur}") )
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=( $(compgen -W "--auth-only --from" -- "${cur}") )
+                    return 0
+                    ;;
+            esac
+            ;;
+        delete|rename|clone|export)
+            local profiles
+            profiles=$(multigravity list --raw 2>/dev/null)
+            COMPREPLY=( $(compgen -W "${profiles}" -- "${cur}") )
             return 0
+            ;;
+        template)
+            if [[ ${cword} -eq 2 ]]; then
+                COMPREPLY=( $(compgen -W "save list delete" -- "${cur}") )
+                return 0
+            fi
+            case "${words[2]}" in
+                save)
+                    local profiles
+                    profiles=$(multigravity list --raw 2>/dev/null)
+                    COMPREPLY=( $(compgen -W "${profiles}" -- "${cur}") )
+                    return 0
+                    ;;
+                delete)
+                    local templates
+                    templates=$(multigravity template list --raw 2>/dev/null)
+                    COMPREPLY=( $(compgen -W "${templates}" -- "${cur}") )
+                    return 0
+                    ;;
+            esac
             ;;
     esac
 }
@@ -1034,6 +1118,14 @@ template_save() {
 template_list() {
   local tpl_dir
   tpl_dir="$(templates_dir)"
+
+  if [ "${1-}" = "--raw" ]; then
+    [ -d "$tpl_dir" ] || return 0
+    for dir in "$tpl_dir"/*; do
+      [ -d "$dir" ] && basename "$dir"
+    done
+    return 0
+  fi
 
   echo "Available templates:"
 
@@ -1265,7 +1357,7 @@ case "$cmd" in
         template_save "${3-}" "${4-}"
         ;;
       list)
-        template_list
+        template_list "${3-}"
         ;;
       delete)
         template_delete "${3-}"

@@ -1,0 +1,65 @@
+_multigravity_completions() {
+    local cur prev words cword
+    if type _init_completion >/dev/null 2>&1; then
+        _init_completion || return
+    else
+        COMPREPLY=()
+        cur="${COMP_WORDS[COMP_CWORD]}"
+        prev="${COMP_WORDS[COMP_CWORD-1]}"
+        words=("${COMP_WORDS[@]}")
+        cword=$COMP_CWORD
+    fi
+
+    local opts="new list status rename delete clone template export import update doctor stats completion help"
+
+    if [[ ${cword} -eq 1 ]]; then
+        local profiles
+        profiles=$(multigravity list --raw 2>/dev/null)
+        COMPREPLY=( $(compgen -W "${opts} ${profiles}" -- "${cur}") )
+        return 0
+    fi
+
+    case "${words[1]}" in
+        new)
+            case "${prev}" in
+                --from)
+                    local templates
+                    templates=$(multigravity template list --raw 2>/dev/null)
+                    COMPREPLY=( $(compgen -W "${templates}" -- "${cur}") )
+                    return 0
+                    ;;
+                *)
+                    COMPREPLY=( $(compgen -W "--auth-only --from" -- "${cur}") )
+                    return 0
+                    ;;
+            esac
+            ;;
+        delete|rename|clone|export)
+            local profiles
+            profiles=$(multigravity list --raw 2>/dev/null)
+            COMPREPLY=( $(compgen -W "${profiles}" -- "${cur}") )
+            return 0
+            ;;
+        template)
+            if [[ ${cword} -eq 2 ]]; then
+                COMPREPLY=( $(compgen -W "save list delete" -- "${cur}") )
+                return 0
+            fi
+            case "${words[2]}" in
+                save)
+                    local profiles
+                    profiles=$(multigravity list --raw 2>/dev/null)
+                    COMPREPLY=( $(compgen -W "${profiles}" -- "${cur}") )
+                    return 0
+                    ;;
+                delete)
+                    local templates
+                    templates=$(multigravity template list --raw 2>/dev/null)
+                    COMPREPLY=( $(compgen -W "${templates}" -- "${cur}") )
+                    return 0
+                    ;;
+            esac
+            ;;
+    esac
+}
+complete -F _multigravity_completions multigravity

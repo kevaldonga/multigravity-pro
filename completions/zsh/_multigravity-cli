@@ -1,0 +1,100 @@
+#compdef multigravity-cli
+# multigravity-cli zsh completion
+
+_multigravity_cli() {
+  local curcontext="$curcontext" state line
+  typeset -A opt_args
+
+  local -a commands
+  commands=(
+    'new:Create a new CLI profile'
+    'list:List all profiles and accounts'
+    'status:Show status dashboard'
+    'whoami:Show logged in account details'
+    'clone:Clone a profile'
+    'rename:Rename a profile'
+    'delete:Delete a profile'
+    'template:Manage profile templates'
+    'export:Export profile to archive'
+    'import:Import profile from archive'
+    'doctor:Check environment health'
+    'stats:Show disk usage stats'
+    'completion:Show shell completion'
+    'help:Show help message'
+  )
+
+  _arguments -C \
+    '1:command or profile:->first_arg' \
+    '*: :->args' && return 0
+
+  case "$state" in
+    first_arg)
+      _describe 'commands' commands
+      local -a profiles
+      profiles=(${(f)"$(multigravity-cli list --raw 2>/dev/null)"})
+      (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+      ;;
+    args)
+      case "$words[2]" in
+        new)
+          _arguments \
+            '--auth-only[Share settings & MCP, isolate only accounts]' \
+            '--from[Create from a saved template]:template:->templates' \
+            '--copy-from[Clone credentials from an existing profile]:profile:->profiles'
+          if [[ "$state" == "profiles" ]]; then
+            local -a profiles
+            profiles=(${(f)"$(multigravity-cli list --raw 2>/dev/null)"})
+            (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+          elif [[ "$state" == "templates" ]]; then
+            local -a templates
+            templates=(${(f)"$(multigravity-cli template list --raw 2>/dev/null)"})
+            (( ${#templates} > 0 )) && _describe -t templates 'templates' templates
+          fi
+          ;;
+        clone|rename|delete|export|whoami)
+          local -a profiles
+          profiles=(${(f)"$(multigravity-cli list --raw 2>/dev/null)"})
+          (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+          ;;
+        template)
+          case "$words[3]" in
+            save)
+              local -a profiles
+              profiles=(${(f)"$(multigravity-cli list --raw 2>/dev/null)"})
+              (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+              ;;
+            delete)
+              local -a templates
+              templates=(${(f)"$(multigravity-cli template list --raw 2>/dev/null)"})
+              (( ${#templates} > 0 )) && _describe -t templates 'templates' templates
+              ;;
+            *)
+              local -a tpl_actions
+              tpl_actions=(
+                'save:Save profile as reusable template'
+                'list:List available templates'
+                'delete:Delete a template'
+              )
+              _describe -t tpl_actions 'template action' tpl_actions
+              ;;
+          esac
+          ;;
+        *)
+          local -a agy_opts
+          agy_opts=(
+            'models:List available models'
+            '-p:Run a single prompt'
+            '--prompt:Run a single prompt'
+            '--model:Specify model'
+            '--resume:Resume previous session'
+            '--continue:Continue last conversation'
+            '--help:Show help'
+          )
+          _describe -t agy_opts 'agy options' agy_opts
+          ;;
+      esac
+      ;;
+  esac
+}
+
+_multigravity_cli "$@"

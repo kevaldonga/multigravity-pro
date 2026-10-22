@@ -1,0 +1,82 @@
+#compdef multigravity
+_multigravity() {
+    local curcontext="$curcontext" state line
+    typeset -A opt_args
+
+    local -a commands
+    commands=(
+        'new:Create a new profile'
+        'list:List existing profiles'
+        'status:Show profile status (running, type, last used)'
+        'rename:Rename a profile'
+        'delete:Delete a profile'
+        'clone:Clone an existing profile'
+        'template:Manage profile templates (save, list, delete)'
+        'export:Export a profile to tar.gz'
+        'import:Import a profile from tar.gz'
+        'update:Update multigravity to latest version'
+        'doctor:Run system diagnosis'
+        'stats:Show profile storage usage'
+        'completion:Setup shell completion'
+        'help:Show help'
+    )
+
+    _arguments -C \
+        '1:command or profile:->first_arg' \
+        '*: :->args' && return 0
+
+    case "$state" in
+        first_arg)
+            _describe -t commands 'multigravity commands' commands
+            local -a profiles
+            profiles=($(multigravity list --raw 2>/dev/null))
+            (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+            ;;
+        args)
+            case "$words[2]" in
+                new)
+                    _arguments \
+                        '--auth-only[Share extensions & settings, isolate only accounts]' \
+                        '--from[Create from a saved template]:template:->templates'
+                    if [[ "$state" == "templates" ]]; then
+                        local -a templates
+                        templates=($(multigravity template list --raw 2>/dev/null))
+                        (( ${#templates} > 0 )) && _describe -t templates 'templates' templates
+                    fi
+                    ;;
+                delete|rename|clone|export|help)
+                    local -a profiles
+                    profiles=($(multigravity list --raw 2>/dev/null))
+                    (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+                    ;;
+                template)
+                    case "$words[3]" in
+                        save)
+                            local -a profiles
+                            profiles=($(multigravity list --raw 2>/dev/null))
+                            (( ${#profiles} > 0 )) && _describe -t profiles 'profiles' profiles
+                            ;;
+                        delete)
+                            local -a templates
+                            templates=($(multigravity template list --raw 2>/dev/null))
+                            (( ${#templates} > 0 )) && _describe -t templates 'templates' templates
+                            ;;
+                        *)
+                            local -a tpl_actions
+                            tpl_actions=(
+                                'save:Save profile as reusable template'
+                                'list:List available templates'
+                                'delete:Delete a template'
+                            )
+                            _describe -t tpl_actions 'template actions' tpl_actions
+                            ;;
+                    esac
+                    ;;
+                *)
+                    _files
+                    ;;
+            esac
+            ;;
+    esac
+}
+_multigravity "$@"

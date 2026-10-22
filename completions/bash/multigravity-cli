@@ -1,0 +1,77 @@
+# multigravity-cli bash completion
+_multigravity_cli() {
+  local cur prev words cword
+  if type _init_completion >/dev/null 2>&1; then
+    _init_completion || return
+  else
+    COMPREPLY=()
+    cur="${COMP_WORDS[COMP_CWORD]}"
+    prev="${COMP_WORDS[COMP_CWORD-1]}"
+    words=("${COMP_WORDS[@]}")
+    cword=$COMP_CWORD
+  fi
+
+  local commands="new list status whoami clone rename delete template export import doctor stats completion help"
+
+  if [ $cword -eq 1 ]; then
+    local profiles
+    profiles="$(multigravity-cli list --raw 2>/dev/null)"
+    COMPREPLY=( $(compgen -W "${commands} ${profiles}" -- "$cur") )
+    return 0
+  fi
+
+  case "${words[1]}" in
+    new)
+      case "$prev" in
+        --copy-from)
+          local profiles
+          profiles="$(multigravity-cli list --raw 2>/dev/null)"
+          COMPREPLY=( $(compgen -W "${profiles}" -- "$cur") )
+          return 0
+          ;;
+        --from)
+          local templates
+          templates="$(multigravity-cli template list --raw 2>/dev/null)"
+          COMPREPLY=( $(compgen -W "${templates}" -- "$cur") )
+          return 0
+          ;;
+        *)
+          COMPREPLY=( $(compgen -W "--auth-only --from --copy-from" -- "$cur") )
+          return 0
+          ;;
+      esac
+      ;;
+    clone|rename|delete|export|whoami)
+      local profiles
+      profiles="$(multigravity-cli list --raw 2>/dev/null)"
+      COMPREPLY=( $(compgen -W "${profiles}" -- "$cur") )
+      return 0
+      ;;
+    template)
+      if [ $cword -eq 2 ]; then
+        COMPREPLY=( $(compgen -W "save list delete" -- "$cur") )
+        return 0
+      fi
+      case "${words[2]}" in
+        save)
+          local profiles
+          profiles="$(multigravity-cli list --raw 2>/dev/null)"
+          COMPREPLY=( $(compgen -W "${profiles}" -- "$cur") )
+          return 0
+          ;;
+        delete)
+          local templates
+          templates="$(multigravity-cli template list --raw 2>/dev/null)"
+          COMPREPLY=( $(compgen -W "${templates}" -- "$cur") )
+          return 0
+          ;;
+      esac
+      ;;
+    *)
+      # Profile name was given as first arg; forward common agy CLI options
+      COMPREPLY=( $(compgen -W "models -p --prompt --model --resume --continue --help" -- "$cur") )
+      return 0
+      ;;
+  esac
+}
+complete -F _multigravity_cli multigravity-cli
