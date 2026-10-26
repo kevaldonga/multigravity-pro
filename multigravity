@@ -588,6 +588,8 @@ launch_profile() {
     linux)
       local keyring_dir="$profile_path/.local/share/keyrings"
       local keyring_run="$profile_path/.run/keyring"
+      pkill -f "gnome-keyring-daemon.*$keyring_run" 2>/dev/null || true
+      rm -rf "$keyring_run"
       mkdir -p "$keyring_dir" "$keyring_run"
       chmod 700 "$profile_path/.run" "$keyring_run" 2>/dev/null || true
 
@@ -612,8 +614,10 @@ launch_profile() {
       export XDG_RUNTIME_DIR="$profile_path/.run"
 
       exec dbus-run-session --dbus-daemon="$silent_dbus" -- bash -c '
-        eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'" 2>/dev/null) >/dev/null 2>&1
-        eval $(gnome-keyring-daemon --start --components=secrets 2>/dev/null) >/dev/null 2>&1
+        trap '\''pkill -f "gnome-keyring-daemon.*'"$keyring_run"'" 2>/dev/null || true'\'' EXIT
+        printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'" >/dev/null 2>&1 || true
+        gnome-keyring-daemon --start --components=secrets >/dev/null 2>&1 || true
+        export GNOME_KEYRING_CONTROL="'"$keyring_run"'"
         "'"$app"'" \
           --user-data-dir "'"$data_dir"'" \
           --extensions-dir "'"$ext_dir"'" \

@@ -355,17 +355,37 @@ get_profile_email() {
     fi
   fi
 
+  # Check CLI logs for authenticated email
+  local latest_log="$p_dir/.gemini/antigravity-cli/cli.log"
+  if [ ! -f "$latest_log" ]; then
+    latest_log="$(ls -t "$p_dir/.gemini/antigravity-cli/log"/cli-*.log 2>/dev/null | head -n 1 || true)"
+  fi
+  if [ -n "$latest_log" ] && [ -f "$latest_log" ]; then
+    local log_email
+    log_email="$(grep -oE '(applyAuthResult: email=|authenticated successfully as )[^, ]+' "$latest_log" 2>/dev/null | tail -n 1 | sed -E 's/.*(as |email=)//' || true)"
+    if [ -n "$log_email" ]; then
+      printf '%s\n' "$log_email" > "$p_dir/.profile_email" 2>/dev/null || true
+      printf '%s\n' "$log_email"
+      return 0
+    fi
+  fi
+
   if [ -f "$p_dir/.local/share/keyrings/login.keyring" ]; then
-    mkdir -p "$p_dir/.run/keyring"
-    chmod 700 "$p_dir/.run" "$p_dir/.run/keyring" 2>/dev/null || true
+    local keyring_run="$p_dir/.run/keyring"
+    pkill -f "gnome-keyring-daemon.*$keyring_run" 2>/dev/null || true
+    rm -f "$keyring_run/control"
+    mkdir -p "$keyring_run"
+    chmod 700 "$p_dir/.run" "$keyring_run" 2>/dev/null || true
     local silent_dbus
     silent_dbus="$(ensure_silent_dbus)"
     local email
     email="$(HOME="$p_dir" XDG_DATA_HOME="$p_dir/.local/share" XDG_RUNTIME_DIR="$p_dir/.run" dbus-run-session --dbus-daemon="$silent_dbus" -- bash -c '
-      eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$p_dir"'/.run/keyring" 2>/dev/null) >/dev/null 2>&1
-      eval $(gnome-keyring-daemon --start --components=secrets 2>/dev/null) >/dev/null 2>&1
+      trap '\''pkill -f "gnome-keyring-daemon.*'"$keyring_run"'" 2>/dev/null || true'\'' EXIT
+      printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'" >/dev/null 2>&1 || true
+      gnome-keyring-daemon --start --components=secrets >/dev/null 2>&1 || true
+      export GNOME_KEYRING_CONTROL="'"$keyring_run"'"
       python3 -c "
-import secretstorage, json, base64, sys
+import secretstorage, json, base64, urllib.request, sys
 try:
     bus = secretstorage.dbus_init()
     for item in secretstorage.get_default_collection(bus).get_all_items():
@@ -379,12 +399,30 @@ try:
                     if e:
                         print(e.strip())
                         sys.exit(0)
+            if \"token\" in data and isinstance(data[\"token\"], dict):
+                acc = data[\"token\"].get(\"access_token\")
+                if acc:
+                    try:
+                        req = urllib.request.Request(\"https://www.googleapis.com/oauth2/v2/userinfo\", headers={\"Authorization\": f\"Bearer {acc}\"})
+                        with urllib.request.urlopen(req, timeout=3) as resp:
+                            uinfo = json.loads(resp.read().decode())
+                            e = uinfo.get(\"email\")
+                            if e:
+                                print(e.strip())
+                                sys.exit(0)
+                    except Exception:
+                        pass
+                print(\"(signed in)\")
+                sys.exit(0)
 except Exception:
     pass
 sys.exit(1)
-" 2>/dev/null' 2>/dev/null | grep -E '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$' | head -n 1 || true)"
+" 2>/dev/null
+    ' 2>/dev/null | grep -E '^[^@[:space:]]+@[^@[:space:]]+\.[^@[:space:]]+$|^\(signed in\)$' | head -n 1 || true)"
     if [ -n "$email" ]; then
-      printf '%s\n' "$email" > "$p_dir/.profile_email" 2>/dev/null || true
+      if [ "$email" != "(signed in)" ]; then
+        printf '%s\n' "$email" > "$p_dir/.profile_email" 2>/dev/null || true
+      fi
       printf '%s\n' "$email"
       return 0
     fi
@@ -428,6 +466,8 @@ launch_profile() {
   if [ "$(platform)" = "linux" ]; then
     local keyring_dir="$profile_path/.local/share/keyrings"
     local keyring_run="$profile_path/.run/keyring"
+    pkill -f "gnome-keyring-daemon.*$keyring_run" 2>/dev/null || true
+    rm -rf "$keyring_run"
     mkdir -p "$keyring_dir" "$keyring_run"
     chmod 700 "$profile_path/.run" "$keyring_run" 2>/dev/null || true
 
@@ -448,12 +488,30 @@ launch_profile() {
     export XDG_RUNTIME_DIR="$profile_path/.run"
 
     exec dbus-run-session --dbus-daemon="$silent_dbus" -- bash -c '
-      eval $(printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'" 2>/dev/null) >/dev/null 2>&1
-      eval $(gnome-keyring-daemon --start --components=secrets 2>/dev/null) >/dev/null 2>&1
+      trap '\''pkill -f "gnome-keyring-daemon.*'"$keyring_run"'" 2>/dev/null || true'\'' EXIT
+      printf "\n" | gnome-keyring-daemon --daemonize --login --components=secrets -C "'"$keyring_run"'" >/dev/null 2>&1 || true
+      gnome-keyring-daemon --start --components=secrets >/dev/null 2>&1 || true
+      export GNOME_KEYRING_CONTROL="'"$keyring_run"'"
+
       "'"$app"'" "$@"
       EXIT_CODE=$?
-      python3 -c "
-import secretstorage, json, base64
+
+      # 1. Try reading authenticated email from the latest cli log
+      LATEST_LOG="'"$profile_path"'/.gemini/antigravity-cli/cli.log"
+      if [ ! -f "$LATEST_LOG" ]; then
+        LATEST_LOG="$(ls -t "'"$profile_path"'"/.gemini/antigravity-cli/log/cli-*.log 2>/dev/null | head -n 1 || true)"
+      fi
+      if [ -n "$LATEST_LOG" ] && [ -f "$LATEST_LOG" ]; then
+        LOG_EMAIL="$(grep -oE "(applyAuthResult: email=|authenticated successfully as )[^, ]+" "$LATEST_LOG" 2>/dev/null | tail -n 1 | sed -E "s/.*(as |email=)//" || true)"
+        if [ -n "$LOG_EMAIL" ]; then
+          printf "%s\n" "$LOG_EMAIL" > "'"$profile_path"'/.profile_email" 2>/dev/null || true
+        fi
+      fi
+
+      # 2. If not found in log, query keyring
+      if [ ! -f "'"$profile_path"'/.profile_email" ]; then
+        python3 -c "
+import secretstorage, json, base64, urllib.request
 try:
     bus = secretstorage.dbus_init()
     for item in secretstorage.get_default_collection(bus).get_all_items():
@@ -466,9 +524,25 @@ try:
                     email = json.loads(base64.urlsafe_b64decode(payload)).get(\"email\")
                     if email:
                         open(\"'"$profile_path"'/.profile_email\", \"w\").write(email.strip() + \"\n\")
+                        break
+            if \"token\" in data and isinstance(data[\"token\"], dict):
+                acc = data[\"token\"].get(\"access_token\")
+                if acc:
+                    try:
+                        req = urllib.request.Request(\"https://www.googleapis.com/oauth2/v2/userinfo\", headers={\"Authorization\": f\"Bearer {acc}\"})
+                        with urllib.request.urlopen(req, timeout=3) as resp:
+                            uinfo = json.loads(resp.read().decode())
+                            email = uinfo.get(\"email\")
+                            if email:
+                                open(\"'"$profile_path"'/.profile_email\", \"w\").write(email.strip() + \"\n\")
+                                break
+                    except Exception:
+                        pass
 except Exception:
     pass
 " 2>/dev/null || true
+      fi
+
       exit $EXIT_CODE
     ' -- "$@"
   else
@@ -569,6 +643,13 @@ new_profile() {
         cp "$src_dir/.gemini/$f" "$target_dir/.gemini/$f"
       fi
     done
+    if [ -d "$src_dir/.local/share/keyrings" ]; then
+      mkdir -p "$target_dir/.local/share/keyrings"
+      cp -R "$src_dir/.local/share/keyrings/"* "$target_dir/.local/share/keyrings/" 2>/dev/null || true
+    fi
+    if [ -f "$src_dir/.profile_email" ]; then
+      cp "$src_dir/.profile_email" "$target_dir/.profile_email"
+    fi
   elif [ "$auth_only" = true ]; then
     create_auth_only_layout "$target_dir"
   else
@@ -603,10 +684,8 @@ whoami_cmd() {
   fi
 
   echo "Profile Accounts:"
-  printf "%-18s %-32s %-12s
-" "PROFILE" "ACCOUNT" "TYPE"
-  printf "%-18s %-32s %-12s
-" "-------" "-------" "----"
+  printf "%-18s %-32s %-12s\n" "PROFILE" "ACCOUNT" "TYPE"
+  printf "%-18s %-32s %-12s\n" "-------" "-------" "----"
 
   if [ -d "$BASE" ]; then
     for dir in "$BASE"/*; do
@@ -616,8 +695,7 @@ whoami_cmd() {
       local email="$(get_profile_email "$name")"
       local p_type="full"
       if is_auth_only "$name"; then p_type="auth-only"; fi
-      printf "%-18s %-32s %-12s
-" "$name" "$email" "$p_type"
+      printf "%-18s %-32s %-12s\n" "$name" "$email" "$p_type"
     done
   fi
 }
@@ -642,6 +720,7 @@ clone_profile() {
 
   print_info "Cloning profile '$src' to '$dest'..."
   cp -R "$src_dir" "$dest_dir"
+  rm -rf "$dest_dir/.run"
 
   print_info "Successfully cloned '$src' to '$dest'"
 }
